@@ -294,8 +294,10 @@ jobs:
 
             if (!lintPassed) {
               const lintDetails = `${{ steps.lint.outputs.lint_details }}` || 'See workflow logs for details.';
+              const lintErrors = '${{ steps.lint.outputs.lint_errors }}' || 'unknown';
+              const lintWarnings = '${{ steps.lint.outputs.lint_warnings }}' || '0';
               body += '### 🧹 ESLint Errors\n\n';
-              body += `Found **${{ steps.lint.outputs.lint_errors || "unknown" }}** error(s) and **${{ steps.lint.outputs.lint_warnings || "0" }}** warning(s).\n\n`;
+              body += `Found **${lintErrors}** error(s) and **${lintWarnings}** warning(s).\n\n`;
               body += '```\n' + lintDetails.substring(0, 2000) + '\n```\n\n';
             }
 
@@ -375,10 +377,10 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Check | Result |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| 🧹 ESLint | ${{ steps.lint.outcome == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| 🔨 Build | ${{ steps.build.outcome == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| ⚡ Lighthouse | ${{ steps.lighthouse.outcome == 'success' && '✅ Passed' || (steps.build.outcome != 'success' && '⏭️ Skipped' || '❌ Failed') }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| 🤖 Decision | ${{ steps.approve.outcome == 'success' && '✅ Approved' || '❌ Changes Requested' }} |" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.lint.outcome }}" == "success" ]; then echo "| 🧹 ESLint | ✅ Passed |" >> $GITHUB_STEP_SUMMARY; else echo "| 🧹 ESLint | ❌ Failed |" >> $GITHUB_STEP_SUMMARY; fi
+          if [ "${{ steps.build.outcome }}" == "success" ]; then echo "| 🔨 Build | ✅ Passed |" >> $GITHUB_STEP_SUMMARY; else echo "| 🔨 Build | ❌ Failed |" >> $GITHUB_STEP_SUMMARY; fi
+          if [ "${{ steps.lighthouse.outcome }}" == "success" ]; then echo "| ⚡ Lighthouse | ✅ Passed |" >> $GITHUB_STEP_SUMMARY; elif [ "${{ steps.build.outcome }}" != "success" ]; then echo "| ⚡ Lighthouse | ⏭️ Skipped |" >> $GITHUB_STEP_SUMMARY; else echo "| ⚡ Lighthouse | ❌ Failed |" >> $GITHUB_STEP_SUMMARY; fi
+          if [ "${{ steps.approve.outcome }}" == "success" ]; then echo "| 🤖 Decision | ✅ Approved |" >> $GITHUB_STEP_SUMMARY; else echo "| 🤖 Decision | ❌ Changes Requested |" >> $GITHUB_STEP_SUMMARY; fi
           echo "" >> $GITHUB_STEP_SUMMARY
 
           if [ "${{ steps.approve.outcome }}" == "success" ]; then
