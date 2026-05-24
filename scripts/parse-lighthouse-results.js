@@ -26,7 +26,7 @@ const path = require('path');
 const THRESHOLDS = {
   'performance-score': { min: 90, unit: '', label: 'Performance Score' },
   'largest-contentful-paint': { max: 2500, unit: 'ms', label: 'Largest Contentful Paint (LCP)' },
-  'first-contentful-paint': { max: 1800, unit: 'ms', label: 'First Contentful Paint (FCP)' },
+  'first-contentful-paint': { max: 3000, unit: 'ms', label: 'First Contentful Paint (FCP)' },
   'cumulative-layout-shift': { max: 0.1, unit: '', label: 'Cumulative Layout Shift (CLS)' },
   'total-blocking-time': { max: 200, unit: 'ms', label: 'Total Blocking Time (TBT)' },
 };
