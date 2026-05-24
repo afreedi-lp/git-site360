@@ -1,0 +1,36 @@
+{
+  "name": "git-auditer",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Automated GitHub PR auditor for React projects",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "lint": "eslint \"src/**/*.{js,jsx,ts,tsx}\"",
+    "map-urls": "node scripts/map-files-to-urls.js",
+    "parse-results": "node scripts/parse-lighthouse-results.js",
+    "generate-email": "node scripts/generate-email-body.js",
+    "validate-config": "node -e \"require('./lighthouserc.js'); console.log('Config valid');\""
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.26.0"
+  },
+  "devDependencies": {
+    "@lhci/cli": "^0.14.0",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "eslint": "^9.8.0",
+    "eslint-plugin-react-hooks": "^5.1.0",
+    "eslint-plugin-react-refresh": "^0.4.9",
+    "serve": "^14.2.0",
+    "vite": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

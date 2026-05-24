@@ -1,0 +1,24 @@
+{
+  "routeMap": {
+    "src/pages/Home": "/",
+    "src/pages/About": "/about",
+    "src/pages/Contact": "/contact",
+    "src/pages/Dashboard": "/dashboard",
+    "src/pages/Login": "/login",
+    "src/pages/Profile": "/profile"
+  },
+  "sharedPaths": [
+    "src/components/",
+    "src/layouts/",
+    "src/hooks/",
+    "src/context/",
+    "src/utils/",
+    "src/styles/",
+    "src/App."
+  ],
+  "defaultUrls": ["/"],
+  "baseUrl": "http://localhost:3000",
+  "buildOutputDir": "./dist",
+  "serveCommand": "npx serve ./dist -l 3000 -s",
+  "serveReadyPattern": "Accepting connections"
+}

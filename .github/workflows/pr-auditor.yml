@@ -1,0 +1,390 @@
+# ┌──────────────────────────────────────────────────────────────────────────────┐
+# │                        🔍 Git Auditer — PR Auditor                         │
+# │                                                                            │
+# │  Automated PR review pipeline for React projects.                          │
+# │  Validates builds, linting, and Lighthouse performance metrics.            │
+# │                                                                            │
+# │  ✅ Pass → Auto-approve + email admin                                      │
+# │  ❌ Fail → Request changes with detailed report                            │
+# └──────────────────────────────────────────────────────────────────────────────┘
+
+name: "🔍 PR Auditor — Build, Lint & Performance"
+
+on:
+  pull_request:
+    # ──── Target branch (change this to your target branch) ────
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+permissions:
+  contents: read
+  pull-requests: write
+
+# Cancel in-progress runs for the same PR (saves CI minutes)
+concurrency:
+  group: pr-auditor-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: "20"
+
+jobs:
+  audit:
+    name: "🔍 Audit PR #${{ github.event.pull_request.number }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      # ════════════════════════════════════════════════════════════════════════
+      # SETUP
+      # ════════════════════════════════════════════════════════════════════════
+
+      - name: "📥 Checkout PR code"
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for git diff
+
+      - name: "🟢 Setup Node.js ${{ env.NODE_VERSION }}"
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+
+      - name: "📦 Install dependencies"
+        run: npm ci
+
+      # ════════════════════════════════════════════════════════════════════════
+      # STEP 1: LINT CHECK
+      # ════════════════════════════════════════════════════════════════════════
+
+      - name: "🧹 ESLint — Check for syntax & code errors"
+        id: lint
+        continue-on-error: true
+        run: |
+          echo "::group::ESLint Output"
+          npx eslint "src/**/*.{js,jsx,ts,tsx}" --format stylish 2>&1 | tee lint-output.txt
+          LINT_EXIT_CODE=${PIPESTATUS[0]}
+          echo "::endgroup::"
+
+          if [ $LINT_EXIT_CODE -ne 0 ]; then
+            echo "lint_passed=false" >> $GITHUB_OUTPUT
+            echo "❌ ESLint found errors"
+
+            # Extract error summary
+            ERRORS=$(grep -c "error" lint-output.txt || echo "0")
+            WARNINGS=$(grep -c "warning" lint-output.txt || echo "0")
+            echo "lint_errors=$ERRORS" >> $GITHUB_OUTPUT
+            echo "lint_warnings=$WARNINGS" >> $GITHUB_OUTPUT
+
+            # Save output for PR comment
+            {
+              echo "lint_details<<LINT_EOF"
+              tail -50 lint-output.txt
+              echo "LINT_EOF"
+            } >> $GITHUB_OUTPUT
+
+            exit 1
+          else
+            echo "lint_passed=true" >> $GITHUB_OUTPUT
+            echo "✅ ESLint passed — no errors found"
+          fi
+
+      # ════════════════════════════════════════════════════════════════════════
+      # STEP 2: BUILD CHECK
+      # ════════════════════════════════════════════════════════════════════════
+
+      - name: "🔨 Build — Check for compilation errors"
+        id: build
+        continue-on-error: true
+        run: |
+          echo "::group::Build Output"
+          npm run build 2>&1 | tee build-output.txt
+          BUILD_EXIT_CODE=${PIPESTATUS[0]}
+          echo "::endgroup::"
+
+          if [ $BUILD_EXIT_CODE -ne 0 ]; then
+            echo "build_passed=false" >> $GITHUB_OUTPUT
+            echo "❌ Build failed"
+
+            # Save build error output for PR comment
+            {
+              echo "build_details<<BUILD_EOF"
+              tail -40 build-output.txt
+              echo "BUILD_EOF"
+            } >> $GITHUB_OUTPUT
+
+            exit 1
+          else
+            echo "build_passed=true" >> $GITHUB_OUTPUT
+            echo "✅ Build succeeded"
+          fi
+
+      # ════════════════════════════════════════════════════════════════════════
+      # STEP 3: DETECT CHANGED FILES & MAP TO URLS
+      # ════════════════════════════════════════════════════════════════════════
+
+      - name: "📂 Detect changed files"
+        id: changed_files
+        if: steps.build.outcome == 'success'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: files } = await github.rest.pulls.listFiles({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              per_page: 100,
+            });
+
+            const fileNames = files.map(f => f.filename);
+            console.log(`Found ${fileNames.length} changed files:`);
+            fileNames.forEach(f => console.log(`  - ${f}`));
+
+            core.setOutput('files', JSON.stringify(fileNames));
+            core.setOutput('count', fileNames.length);
+
+      - name: "🗺️ Map changed files to page URLs"
+        id: map_urls
+        if: steps.build.outcome == 'success'
+        run: |
+          node scripts/map-files-to-urls.js '${{ steps.changed_files.outputs.files }}'
+
+      # ════════════════════════════════════════════════════════════════════════
+      # STEP 4: LIGHTHOUSE PERFORMANCE AUDIT
+      # ════════════════════════════════════════════════════════════════════════
+
+      - name: "🚀 Install Lighthouse CI"
+        if: steps.build.outcome == 'success'
+        run: npm install -g @lhci/cli@0.14.x
+
+      - name: "⚡ Lighthouse CI — Performance audit"
+        id: lighthouse
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        env:
+          LHCI_URLS: ${{ steps.map_urls.outputs.urls }}
+        run: |
+          echo "::group::Lighthouse CI Output"
+          lhci autorun --config=lighthouserc.js 2>&1 | tee lighthouse-output.txt
+          LHCI_EXIT_CODE=${PIPESTATUS[0]}
+          echo "::endgroup::"
+
+          if [ $LHCI_EXIT_CODE -ne 0 ]; then
+            echo "lighthouse_passed=false" >> $GITHUB_OUTPUT
+            echo "❌ Lighthouse CI found performance issues"
+          else
+            echo "lighthouse_passed=true" >> $GITHUB_OUTPUT
+            echo "✅ Lighthouse CI passed — all thresholds met"
+          fi
+
+          # Extract report links from output
+          REPORT_URL=$(grep -oP 'https://storage\.googleapis\.com/[^\s]+' lighthouse-output.txt | head -1 || echo "")
+          echo "report_url=$REPORT_URL" >> $GITHUB_OUTPUT
+
+      - name: "📊 Parse Lighthouse results"
+        id: parse_results
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        run: |
+          node scripts/parse-lighthouse-results.js .lighthouseci
+
+      # ════════════════════════════════════════════════════════════════════════
+      # STEP 5: DECISION — APPROVE OR REJECT
+      # ════════════════════════════════════════════════════════════════════════
+
+      - name: "🤖 Post performance report as PR comment"
+        if: always() && steps.build.outcome == 'success'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            // Read the markdown report
+            let report = '';
+            try {
+              report = fs.readFileSync('.lighthouseci/report.md', 'utf8');
+            } catch (e) {
+              report = '⚠️ Could not read Lighthouse report.';
+            }
+
+            const reportUrl = '${{ steps.lighthouse.outputs.report_url }}';
+            const reportLink = reportUrl
+              ? `\n\n🔗 [View Full Lighthouse Report](${reportUrl})`
+              : '';
+
+            // Delete previous bot comments to avoid clutter
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+            });
+
+            for (const comment of comments) {
+              if (comment.body.includes('📊 Lighthouse Performance Report')) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: comment.id,
+                });
+              }
+            }
+
+            // Post new comment
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              body: report + reportLink,
+            });
+
+      - name: "✅ Approve PR — All checks passed"
+        id: approve
+        if: |
+          always() &&
+          steps.lint.outcome == 'success' &&
+          steps.build.outcome == 'success' &&
+          (steps.lighthouse.outcome == 'success' || steps.parse_results.outcome == 'success')
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.pulls.createReview({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              event: 'APPROVE',
+              body: [
+                '## ✅ Automated Review — All Checks Passed!',
+                '',
+                '| Check | Status |',
+                '|-------|--------|',
+                '| 🧹 ESLint | ✅ Passed |',
+                '| 🔨 Build | ✅ Passed |',
+                '| ⚡ Performance | ✅ Passed |',
+                '',
+                '> 🤖 This PR has been automatically approved by **Git Auditer**.',
+                '> All syntax, compilation, and performance checks have passed.',
+              ].join('\n'),
+            });
+
+            console.log('✅ PR approved successfully!');
+
+      - name: "❌ Reject PR — Checks failed"
+        if: |
+          always() &&
+          (steps.lint.outcome == 'failure' || steps.build.outcome == 'failure' ||
+           (steps.lighthouse.outcome == 'failure' && steps.parse_results.outcome == 'failure'))
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const lintPassed = '${{ steps.lint.outcome }}' === 'success';
+            const buildPassed = '${{ steps.build.outcome }}' === 'success';
+            const perfPassed = '${{ steps.lighthouse.outcome }}' === 'success' ||
+                               '${{ steps.parse_results.outcome }}' === 'success';
+
+            let body = '## ❌ Automated Review — Changes Requested\n\n';
+            body += '| Check | Status |\n';
+            body += '|-------|--------|\n';
+            body += `| 🧹 ESLint | ${lintPassed ? '✅ Passed' : '❌ Failed'} |\n`;
+            body += `| 🔨 Build | ${buildPassed ? '✅ Passed' : '❌ Failed'} |\n`;
+            body += `| ⚡ Performance | ${perfPassed ? '✅ Passed' : '❌ Failed'} |\n\n`;
+
+            if (!lintPassed) {
+              const lintDetails = `${{ steps.lint.outputs.lint_details }}` || 'See workflow logs for details.';
+              body += '### 🧹 ESLint Errors\n\n';
+              body += `Found **${{ steps.lint.outputs.lint_errors || "unknown" }}** error(s) and **${{ steps.lint.outputs.lint_warnings || "0" }}** warning(s).\n\n`;
+              body += '```\n' + lintDetails.substring(0, 2000) + '\n```\n\n';
+            }
+
+            if (!buildPassed) {
+              const buildDetails = `${{ steps.build.outputs.build_details }}` || 'See workflow logs for details.';
+              body += '### 🔨 Build Errors\n\n';
+              body += 'The project failed to compile. Please fix the following errors:\n\n';
+              body += '```\n' + buildDetails.substring(0, 2000) + '\n```\n\n';
+            }
+
+            if (!perfPassed && buildPassed) {
+              body += '### ⚡ Performance Issues\n\n';
+              body += 'Some performance metrics did not meet the required thresholds.\n';
+              body += 'See the detailed Lighthouse report in the PR comments above.\n\n';
+              body += '**Required thresholds:**\n';
+              body += '- Performance Score: ≥ 90\n';
+              body += '- LCP: ≤ 2,500ms\n';
+              body += '- FCP: ≤ 1,800ms\n';
+              body += '- CLS: ≤ 0.1\n';
+              body += '- TBT: ≤ 200ms\n\n';
+            }
+
+            body += '---\n';
+            body += '> 🤖 This review was posted by **Git Auditer**. ';
+            body += 'Please fix the issues above and push new commits to re-trigger the audit.\n';
+
+            await github.rest.pulls.createReview({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              event: 'REQUEST_CHANGES',
+              body: body,
+            });
+
+            console.log('❌ PR rejected — changes requested.');
+
+      # ════════════════════════════════════════════════════════════════════════
+      # STEP 6: EMAIL NOTIFICATION (on approval only)
+      # ════════════════════════════════════════════════════════════════════════
+
+      - name: "📧 Generate email body"
+        id: email_body
+        if: steps.approve.outcome == 'success'
+        run: |
+          node scripts/generate-email-body.js \
+            --pr-number "${{ github.event.pull_request.number }}" \
+            --pr-title "${{ github.event.pull_request.title }}" \
+            --pr-author "${{ github.event.pull_request.user.login }}" \
+            --pr-url "${{ github.event.pull_request.html_url }}" \
+            --repo "${{ github.repository }}" \
+            --branch "${{ github.head_ref }} → ${{ github.base_ref }}" \
+            --report-file ".lighthouseci/report.md" \
+            --lighthouse-url "${{ steps.lighthouse.outputs.report_url }}"
+
+      - name: "📧 Send approval email to admin"
+        if: steps.approve.outcome == 'success'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "✅ PR #${{ github.event.pull_request.number }} Approved — ${{ github.event.pull_request.title }}"
+          to: ${{ secrets.ADMIN_EMAIL }}
+          from: "Git Auditer <${{ secrets.MAIL_USERNAME }}>"
+          html_body: file://.lighthouseci/email.html
+          content_type: text/html
+
+      # ════════════════════════════════════════════════════════════════════════
+      # SUMMARY
+      # ════════════════════════════════════════════════════════════════════════
+
+      - name: "📋 Job Summary"
+        if: always()
+        run: |
+          echo "## 🔍 PR Audit Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Result |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| 🧹 ESLint | ${{ steps.lint.outcome == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🔨 Build | ${{ steps.build.outcome == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ⚡ Lighthouse | ${{ steps.lighthouse.outcome == 'success' && '✅ Passed' || (steps.build.outcome != 'success' && '⏭️ Skipped' || '❌ Failed') }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| 🤖 Decision | ${{ steps.approve.outcome == 'success' && '✅ Approved' || '❌ Changes Requested' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ steps.approve.outcome }}" == "success" ]; then
+            echo "### ✅ PR #${{ github.event.pull_request.number }} has been **approved**." >> $GITHUB_STEP_SUMMARY
+            echo "📧 Admin notification email sent." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ❌ PR #${{ github.event.pull_request.number }} — **changes requested**." >> $GITHUB_STEP_SUMMARY
+            echo "Please review the failure details in the PR comments." >> $GITHUB_STEP_SUMMARY
+          fi
