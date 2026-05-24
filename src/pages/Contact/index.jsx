@@ -36,7 +36,7 @@ function Contact() {
             {/* Form */}
             <div className="card animate-in" style={{ padding: '40px' }}>
               <h3 className="section-title" style={{ fontSize: '22px', marginBottom: '28px' }}>
-                Send a Message
+                Send a Message (modified)
               </h3>
 
               {submitted ? (
