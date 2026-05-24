@@ -74,8 +74,8 @@ jobs:
             echo "❌ ESLint found errors"
 
             # Extract error summary
-            ERRORS=$(grep -c "error" lint-output.txt || echo "0")
-            WARNINGS=$(grep -c "warning" lint-output.txt || echo "0")
+            ERRORS=$(grep -c "error" lint-output.txt || true)
+            WARNINGS=$(grep -c "warning" lint-output.txt || true)
             echo "lint_errors=$ERRORS" >> $GITHUB_OUTPUT
             echo "lint_warnings=$WARNINGS" >> $GITHUB_OUTPUT
 
